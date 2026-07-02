@@ -1,14 +1,14 @@
 name: 每日股票分析
 
 on:
-  # 定时触发 - 美股收盘后 30 分钟（自动适配夏令时/冬令时 DST）
+  # 定时触发 - 美股收盘后 5 分钟（自动适配夏令时/冬令时 DST）
   # 列出两个 UTC 时间，由下方 gate 作业只放行纽约时间 16 点的那一次：
-  #   - 夏令时 EDT: 收盘 16:00 ET = 20:00 UTC -> 16:30 ET = 20:30 UTC
-  #   - 冬令时 EST: 收盘 16:00 ET = 21:00 UTC -> 16:30 ET = 21:30 UTC
-  # 效果：全年每个交易日仅在收盘后 30 分钟运行一次，无需手动改时间。
+  #   - 夏令时 EDT: 收盘 16:00 ET = 20:00 UTC -> 16:05 ET = 20:05 UTC
+  #   - 冬令时 EST: 收盘 16:00 ET = 21:00 UTC -> 16:05 ET = 21:05 UTC
+  # 运行约 12 分钟，报告约在丹麦时间 22:18 送达（收盘 22:00 + 5 分缓冲 + 12 分运行）。
   schedule:
-    - cron: '30 20 * * 1-5'    # 16:30 America/New_York during EDT (summer)
-    - cron: '30 21 * * 1-5'    # 16:30 America/New_York during EST (winter)
+    - cron: '5 20 * * 1-5'     # 16:05 America/New_York during EDT (summer)
+    - cron: '5 21 * * 1-5'     # 16:05 America/New_York during EST (winter)
 
   # 手动触发
   workflow_dispatch:
@@ -41,7 +41,7 @@ jobs:
     outputs:
       proceed: ${{ steps.check.outputs.proceed }}
     steps:
-      - name: Gate scheduled runs to 16:30 America/New_York (DST-aware)
+      - name: Gate scheduled runs to 16:05 America/New_York (DST-aware)
         id: check
         run: |
           if [ "${{ github.event_name }}" != "schedule" ]; then
@@ -52,7 +52,7 @@ jobs:
           ET_HOUR=$(TZ="America/New_York" date +%H)
           echo "America/New_York now: $(TZ='America/New_York' date)"
           if [ "$ET_HOUR" = "16" ]; then
-            echo "16:30 ET (30m after US market close) -> proceed."
+            echo "16:05 ET (5m after US market close) -> proceed."
             echo "proceed=true" >> "$GITHUB_OUTPUT"
           else
             echo "Not 16:xx ET (hour=$ET_HOUR) -> skip; the other seasonal cron is the live one now."

@@ -1,10 +1,15 @@
 name: 每日股票分析
 
 on:
-  # 定时触发 - 每天北京时间 18:00 (UTC 10:00)
+  # 定时触发 - 美股收盘后 30 分钟（自动适配夏令时/冬令时 DST）
+  # 列出两个 UTC 时间，由下方 gate 作业只放行纽约时间 16 点的那一次：
+  #   - 夏令时 EDT: 收盘 16:00 ET = 20:00 UTC -> 16:30 ET = 20:30 UTC
+  #   - 冬令时 EST: 收盘 16:00 ET = 21:00 UTC -> 16:30 ET = 21:30 UTC
+  # 效果：全年每个交易日仅在收盘后 30 分钟运行一次，无需手动改时间。
   schedule:
-    - cron: '0 21 * * 1-5'     # Weekdays 21:00 UTC (after US close) = 23:00 Copenhagen (summer) / 22:00 (winter)
-  
+    - cron: '30 20 * * 1-5'    # 16:30 America/New_York during EDT (summer)
+    - cron: '30 21 * * 1-5'    # 16:30 America/New_York during EST (winter)
+
   # 手动触发
   workflow_dispatch:
     inputs:
@@ -29,7 +34,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # DST 感知门控：定时触发列出两个 UTC cron，只放行纽约时间 17:00 的那一次；
+  # 手动触发（workflow_dispatch）始终放行。
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - name: Gate scheduled runs to 16:30 America/New_York (DST-aware)
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "Manual/non-schedule trigger -> proceed."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ET_HOUR=$(TZ="America/New_York" date +%H)
+          echo "America/New_York now: $(TZ='America/New_York' date)"
+          if [ "$ET_HOUR" = "16" ]; then
+            echo "16:30 ET (30m after US market close) -> proceed."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Not 16:xx ET (hour=$ET_HOUR) -> skip; the other seasonal cron is the live one now."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   analyze:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     # 兼容误将 STOCK_LIST 配到同名 Environment variables 的场景；
     # 推荐位置仍是 Settings -> Secrets and variables -> Actions -> Repository variables。

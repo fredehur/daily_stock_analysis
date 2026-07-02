@@ -241,38 +241,41 @@ class TelegramSender:
         *,
         timeout_seconds: Optional[float] = None,
     ) -> bool:
-        """分段发送长 Telegram 消息"""
-        # 按段落分割
-        sections = content.split("\n---\n")
+        """分段发送长 Telegram 消息（单个过长段落会被硬拆分，避免 400 message is too long）"""
+        sep = "\n---\n"
+        # 留出余量给分隔符/Markdown，防止恰好撞上 4096 硬上限
+        limit = max(500, max_length - 100)
 
-        current_chunk = []
-        current_length = 0
-        all_success = True
-        chunk_index = 1
-
+        # 1) 先构建好每一块的文本，保证每块 <= limit
+        sections = content.split(sep)
+        chunks = []
+        current = []
+        current_len = 0
         for section in sections:
-            section_length = len(section) + 5  # +5 for "\n---\n"
+            # 单个段落本身就超限 -> 先刷新当前块，再把它硬拆成多块
+            if len(section) > limit:
+                if current:
+                    chunks.append(sep.join(current))
+                    current, current_len = [], 0
+                for i in range(0, len(section), limit):
+                    chunks.append(section[i:i + limit])
+                continue
 
-            if current_length + section_length > max_length:
-                # 发送当前块
-                if current_chunk:
-                    chunk_content = "\n---\n".join(current_chunk)
-                    logger.info(f"发送 Telegram 消息块 {chunk_index}...")
-                    if not self._send_telegram_message(api_url, chat_id, chunk_content, message_thread_id, timeout_seconds=timeout_seconds):
-                        all_success = False
-                    chunk_index += 1
-
-                # 重置
-                current_chunk = [section]
-                current_length = section_length
+            add_len = len(section) + len(sep)
+            if current and current_len + add_len > limit:
+                chunks.append(sep.join(current))
+                current, current_len = [section], len(section) + len(sep)
             else:
-                current_chunk.append(section)
-                current_length += section_length
+                current.append(section)
+                current_len += add_len
 
-        # 发送最后一块
-        if current_chunk:
-            chunk_content = "\n---\n".join(current_chunk)
-            logger.info(f"发送 Telegram 消息块 {chunk_index}...")
+        if current:
+            chunks.append(sep.join(current))
+
+        # 2) 逐块发送
+        all_success = True
+        for idx, chunk_content in enumerate(chunks, 1):
+            logger.info(f"发送 Telegram 消息块 {idx}...")
             if not self._send_telegram_message(api_url, chat_id, chunk_content, message_thread_id, timeout_seconds=timeout_seconds):
                 all_success = False
 

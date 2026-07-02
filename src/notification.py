@@ -1742,7 +1742,10 @@ class NotificationService(
             name = self._get_display_name(r, report_language)
             dash = r.dashboard or {}
             core = dash.get('core_conclusion', {}) or {}
-            one = (core.get('one_sentence') or r.analysis_summary or '')[:60]
+            one = (core.get('one_sentence') or r.analysis_summary or '').strip()
+            # Keep the full one-sentence conclusion; only trim very long ones at a word boundary
+            if len(one) > 160:
+                one = one[:160].rsplit(' ', 1)[0].rstrip() + '…'
             lines.append(
                 f"**{name}({r.code})** {emoji} "
                 f"{localize_operation_advice(r.operation_advice, report_language)} | "

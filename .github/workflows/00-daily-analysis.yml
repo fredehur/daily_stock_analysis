@@ -34,7 +34,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # DST 感知门控：定时触发列出两个 UTC cron，只放行纽约时间 17:00 的那一次；
+  # DST 感知门控：定时触发列出两个 UTC cron，只放行纽约时间 16 点（16:05）那一次；
   # 手动触发（workflow_dispatch）始终放行。
   gate:
     runs-on: ubuntu-latest

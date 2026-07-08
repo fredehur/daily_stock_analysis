@@ -41,21 +41,26 @@ jobs:
     outputs:
       proceed: ${{ steps.check.outputs.proceed }}
     steps:
-      - name: Gate scheduled runs to 16:05 America/New_York (DST-aware)
+      - name: Gate scheduled runs to the DST-correct cron (delay-immune)
         id: check
+        # 之前用「纽约时间正好 16 点」放行，但 GitHub Actions 定时触发常被延迟
+        # ~60 分钟以上，实际落到 17/18 点，导致 gate 每天都判定 skip、报告不再送达。
+        # 改为按「哪条 cron 触发了本次运行」+「当前是否夏令时」放行：
+        # github.event.schedule 记录的是排定的 cron 字符串，不受执行延迟影响。
         run: |
           if [ "${{ github.event_name }}" != "schedule" ]; then
             echo "Manual/non-schedule trigger -> proceed."
             echo "proceed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          ET_HOUR=$(TZ="America/New_York" date +%H)
-          echo "America/New_York now: $(TZ='America/New_York' date)"
-          if [ "$ET_HOUR" = "16" ]; then
-            echo "16:05 ET (5m after US market close) -> proceed."
+          TZ_ABBR=$(TZ="America/New_York" date +%Z)   # EDT(夏令时) 或 EST(冬令时)
+          SCHED='${{ github.event.schedule }}'         # 触发本次运行的 cron，如 "5 20 * * 1-5"
+          echo "America/New_York now: $(TZ='America/New_York' date) ($TZ_ABBR); cron=$SCHED"
+          if { [ "$TZ_ABBR" = "EDT" ] && [ "$SCHED" = "5 20 * * 1-5" ]; } ||              { [ "$TZ_ABBR" = "EST" ] && [ "$SCHED" = "5 21 * * 1-5" ]; }; then
+            echo "DST-correct cron -> proceed (immune to scheduling delay)."
             echo "proceed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Not 16:xx ET (hour=$ET_HOUR) -> skip; the other seasonal cron is the live one now."
+            echo "Off-season cron for current DST ($TZ_ABBR) -> skip; the other cron is the live one."
             echo "proceed=false" >> "$GITHUB_OUTPUT"
           fi
 

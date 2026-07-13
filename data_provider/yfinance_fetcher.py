@@ -16,6 +16,7 @@ YfinanceFetcher - 兜底数据源 (Priority 4)
 
 import csv
 import logging
+import re
 from datetime import datetime
 from io import StringIO
 from typing import Optional, List, Dict, Any
@@ -34,7 +35,11 @@ from tenacity import (
 from .base import BaseFetcher, DataFetchError, STANDARD_COLUMNS, is_bse_code
 from .realtime_types import UnifiedRealtimeQuote, RealtimeSource
 from .us_index_mapping import get_us_index_yf_symbol, is_us_stock_code
-from src.services.market_symbol_utils import get_suffix_market, is_suffix_market_symbol
+from src.services.market_symbol_utils import (
+    get_suffix_market,
+    is_suffix_market_symbol,
+    split_suffix_symbol,
+)
 
 # 可选导入本地股票映射补丁，若缺失则使用空字典兜底
 try:
@@ -93,6 +98,29 @@ class YfinanceFetcher(BaseFetcher):
         """
         return is_suffix_market_symbol(stock_code, "tw")
 
+    # 欧洲市场 Yahoo 后缀（显式 suffix-only 代码原样传给 Yahoo）：
+    # CO=哥本哈根, ST=斯德哥尔摩, OL=奥斯陆, HE=赫尔辛基, DE=法兰克福(Xetra),
+    # PA=巴黎, AS=阿姆斯特丹, BR=布鲁塞尔, LS=里斯本, MI=米兰, MC=马德里,
+    # L=伦敦, SW=瑞士, VI=维也纳, IR=爱尔兰
+    _EUROPEAN_YF_SUFFIXES = frozenset({
+        "CO", "ST", "OL", "HE", "DE", "PA", "AS", "BR", "LS", "MI", "MC", "L", "SW", "VI", "IR",
+    })
+
+    @classmethod
+    def _is_european_suffix_stock(cls, stock_code: str) -> bool:
+        """Return True for explicit European suffix-only Yahoo symbols (e.g. NOVO-B.CO).
+
+        欧洲代码以字母开头（可含数字/连字符），与 A股/日韩台的纯数字 base 区分，
+        避免误吞未带市场信息的数字代码。
+        """
+        parts = split_suffix_symbol(stock_code)
+        if parts is None:
+            return False
+        base, suffix = parts
+        if suffix not in cls._EUROPEAN_YF_SUFFIXES:
+            return False
+        return bool(re.fullmatch(r"[A-Z][A-Z0-9-]{0,11}", base))
+
     def _convert_stock_code(self, stock_code: str) -> str:
         """
         转换股票代码为 Yahoo Finance 格式
@@ -133,6 +161,11 @@ class YfinanceFetcher(BaseFetcher):
         # 日股/韩股/台股 MVP：显式 Yahoo Finance suffix-only 代码，原样传给 Yahoo。
         if self._is_jp_kr_suffix_stock(code) or self._is_tw_suffix_stock(code):
             logger.debug(f"识别为日韩台 Yahoo suffix 代码: {code}")
+            return code
+
+        # 欧洲市场：显式 Yahoo suffix-only 代码（如 NOVO-B.CO），原样传给 Yahoo。
+        if self._is_european_suffix_stock(code):
+            logger.debug(f"识别为欧洲 Yahoo suffix 代码: {code}")
             return code
 
         # 港股：hk前缀 -> .HK后缀
@@ -804,13 +837,14 @@ class YfinanceFetcher(BaseFetcher):
                 index_name=index_name,
             )
 
-        # 仅处理美股股票或 JP/KR/TW suffix-only 股票
+        # 仅处理美股股票或 JP/KR/TW/欧洲 suffix-only 股票
         if not (
             self._is_us_stock(stock_code)
             or self._is_jp_kr_suffix_stock(stock_code)
             or self._is_tw_suffix_stock(stock_code)
+            or self._is_european_suffix_stock(stock_code)
         ):
-            logger.debug(f"[Yfinance] {stock_code} 不是美股或日韩 suffix 代码，跳过")
+            logger.debug(f"[Yfinance] {stock_code} 不是美股或日韩/欧洲 suffix 代码，跳过")
             return None
 
         try:

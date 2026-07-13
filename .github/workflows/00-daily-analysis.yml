@@ -5,7 +5,7 @@ on:
   # 列出两个 UTC 时间，由下方 gate 作业只放行纽约时间 16 点的那一次：
   #   - 夏令时 EDT: 收盘 16:00 ET = 20:00 UTC -> 16:05 ET = 20:05 UTC
   #   - 冬令时 EST: 收盘 16:00 ET = 21:00 UTC -> 16:05 ET = 21:05 UTC
-  # 运行约 12 分钟，报告约在丹麦时间 22:18 送达（收盘 22:00 + 5 分缓冲 + 12 分运行）。
+  # 运行约 12 分钟；GitHub 定时任务常延迟 60-90 分钟启动，报告一般在丹麦时间 22:20-23:45 送达。
   schedule:
     - cron: '5 20 * * 1-5'     # 16:05 America/New_York during EDT (summer)
     - cron: '5 21 * * 1-5'     # 16:05 America/New_York during EST (winter)
@@ -34,14 +34,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # DST 感知门控：定时触发列出两个 UTC cron，只放行纽约时间 16 点（16:05）那一次；
+  # DST 感知门控：定时触发列出两个 UTC cron，只放行「当季正确」的那一个。
+  # 判据是触发本次运行的 cron 表达式（github.event.schedule），而不是当前时钟——
+  # GitHub 定时任务经常晚 60-90+ 分钟启动，按时钟判断会导致每次都被跳过。
   # 手动触发（workflow_dispatch）始终放行。
   gate:
     runs-on: ubuntu-latest
     outputs:
       proceed: ${{ steps.check.outputs.proceed }}
     steps:
-      - name: Gate scheduled runs to 16:05 America/New_York (DST-aware)
+      - name: Gate scheduled runs to the seasonally-correct cron (DST-aware, delay-immune)
         id: check
         run: |
           if [ "${{ github.event_name }}" != "schedule" ]; then
@@ -49,13 +51,15 @@ jobs:
             echo "proceed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          ET_HOUR=$(TZ="America/New_York" date +%H)
-          echo "America/New_York now: $(TZ='America/New_York' date)"
-          if [ "$ET_HOUR" = "16" ]; then
-            echo "16:05 ET (5m after US market close) -> proceed."
+          ZONE=$(TZ="America/New_York" date +%Z)   # EDT (summer) or EST (winter)
+          FIRED="${{ github.event.schedule }}"
+          echo "America/New_York now: $(TZ='America/New_York' date) (zone=$ZONE, fired cron: '$FIRED')"
+          if { [ "$ZONE" = "EDT" ] && [ "$FIRED" = "5 20 * * 1-5" ]; } || \
+             { [ "$ZONE" = "EST" ] && [ "$FIRED" = "5 21 * * 1-5" ]; }; then
+            echo "Seasonally-correct cron for $ZONE -> proceed (regardless of runner start delay)."
             echo "proceed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Not 16:xx ET (hour=$ET_HOUR) -> skip; the other seasonal cron is the live one now."
+            echo "Off-season cron for $ZONE -> skip; its seasonal twin is the live one."
             echo "proceed=false" >> "$GITHUB_OUTPUT"
           fi
 

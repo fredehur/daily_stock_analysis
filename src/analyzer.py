@@ -13,6 +13,7 @@ A股自选股智能分析系统 - AI分析层
 import json
 import logging
 import math
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -655,6 +656,11 @@ _SINGLE_CHAR_NEGATION_GAP_PREFIXES: Tuple[str, ...] = (
     "守",
     "破",
 )
+
+
+def _is_brief_analysis_enabled() -> bool:
+    """ANALYSIS_BRIEF=true 时要求 LLM 输出精简仪表盘（键名不变，仅压缩自由文本），控制输出 token 成本。"""
+    return os.getenv("ANALYSIS_BRIEF", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _normalize_prompt_reason_items(items: Any) -> List[str]:
@@ -3933,7 +3939,29 @@ class GeminiAnalyzer:
 - 所有面向用户的人类可读文本值必须使用中文。
 - 当数据缺失时，请使用中文直接说明“{no_data_text}，无法判断”。
 """
-        
+
+        if _is_brief_analysis_enabled():
+            if report_language == "en":
+                prompt += """
+
+### Brevity requirements (cost control — apply to every free-text value)
+- Keep the JSON structure and every key exactly as specified above; only compress the values.
+- Every free-text value: one short sentence, max ~20 words. No filler, no restating numbers already shown in the tables above.
+- List fields (`risk_alerts`, `positive_catalysts`, `watch_conditions`, `data_limitations`): max 2 items each.
+- Checklist items: the ✅/⚠️/❌ marker plus at most 8 words each.
+- Do not output any prose outside the JSON.
+"""
+            else:
+                prompt += """
+
+### 精简输出要求（成本控制——适用于所有自由文本字段）
+- JSON 结构和所有键名保持不变，只压缩文本值。
+- 每个自由文本字段：一句话（20字以内），不写套话，不重复上方表格中已有的数字。
+- 列表字段（risk_alerts、positive_catalysts、watch_conditions、data_limitations）：每个最多 2 项。
+- 检查清单：✅/⚠️/❌ 标记加不超过 15 字。
+- JSON 之外不要输出任何文字。
+"""
+
         return prompt
     
     def _format_volume(self, volume: Optional[float]) -> str:
